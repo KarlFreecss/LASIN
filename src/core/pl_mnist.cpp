@@ -6,11 +6,190 @@
 #include <SWI-Prolog.h>
 #include <mlpack/core.hpp>
 
+#include <iostream>
+#include <algorithm>
+#include <vector>
+#include <fstream>
+
+#define DEBUG_INFO(x) cout << __FILE__ << "_" << __LINE__ << " : " << #x << " = " << x << endl
+
 using namespace std;
 using namespace arma;
 
 /* swap int for bresenham algorithm */
 inline void swap_int(int *a, int *b);
+
+struct PointI2D{
+    int x;
+    int y;
+    PointI2D(const int _x, const int _y): x(_x), y(_y){}
+    PointI2D(): x(0), y(0){}
+};
+
+using namespace std;
+
+const int thresh = 127;
+
+int point_in_image(const vector<vector<int>> & img, const PointI2D & A){
+    const int x = A.x;
+    const int y = A.y;
+    return img[x][y] > thresh;
+}
+
+int equal_point(const PointI2D & A, const PointI2D & B){
+    if (A.x != B.x)
+        return false;
+    if (A.y != B.y)
+        return false;
+    return true;
+}
+
+int used_image(vector<vector<bool>> & used, PointI2D A, PointI2D B){
+    while (equal_point(A, B) == false){
+        const int dx = B.x - A.x;
+        const int dy = B.y - A.y;
+        int ty = 0, tx = 0, mx = 0, my = 0;
+    
+        if (abs(dx) == abs(dy)){
+            mx = 1;
+            my = 1;
+        } else if (abs(dx) > abs(dy)){
+            mx = 1;
+            my = 0;
+        } else {
+            mx = 0;
+            my = 1;
+        }
+        if (dx > 0)
+            tx = 1;
+        else
+            tx = -1;
+
+        if (dy > 0)
+            ty = 1;
+        else
+            ty = -1;
+
+        const int x = A.x;
+        const int y = A.y;
+        A.x = (x + tx * mx);
+        A.y = (y + ty * my);
+        used[x + tx * mx][y + ty * my] = true;
+    }
+    return true;
+}
+
+int line_in_image(const vector<vector<int>> & img, PointI2D A, PointI2D B){
+    if (point_in_image(img, A) == false or point_in_image(img, B) == false){
+        return false;
+    }
+    while (equal_point(A, B) == false){
+        const int dx = B.x - A.x;
+        const int dy = B.y - A.y;
+        int ty = 0, tx = 0, mx = 0, my = 0;
+    
+        if (abs(dx) == abs(dy)){
+            mx = 1;
+            my = 1;
+        } else if (abs(dx) > abs(dy)){
+            mx = 1;
+            my = 0;
+        } else {
+            mx = 0;
+            my = 1;
+        }
+        if (dx > 0)
+            tx = 1;
+        else
+            tx = -1;
+
+        if (dy > 0)
+            ty = 1;
+        else
+            ty = -1;
+
+        const int x = A.x;
+        const int y = A.y;
+        A.x = (x + tx * mx);
+        A.y = (y + ty * my);
+        if (point_in_image(img, A) == false){
+            return false;
+        }
+    }
+    return point_in_image(img, A);
+}
+
+double distance(const PointI2D &A, const PointI2D &B){
+    const int dx = A.x - B.x;
+    const int dy = A.y - B.y;
+    return dx * dx + dy * dy;
+}
+
+vector<pair<PointI2D, PointI2D>> get_strokes(const vector<vector<int>> & img, const vector<PointI2D> & pointList) {
+    vector<vector<bool>> used(img.size(), vector<bool>(img[0].size(), false));
+    vector<pair<PointI2D, PointI2D>> ret;
+    for (int i = 0; i < pointList.size(); ++i){
+        const int x = pointList[i].x;
+        const int y = pointList[i].y;
+        if (used[x][y]){
+            continue;
+        }
+        used[x][y] = true;
+        double max_dist = 0;
+        int max_dist_index = -1;
+        for (int j = i + 1; j < pointList.size(); ++j){
+            if (line_in_image(img, pointList[i], pointList[j])){
+                const double points_dist = distance(pointList[i], pointList[j]);
+                if (points_dist > max_dist){
+                    max_dist = points_dist;
+                    max_dist_index = j;
+                }
+            }
+        }
+        if (max_dist_index != -1) {
+            const int jx = pointList[max_dist_index].x;
+            const int jy = pointList[max_dist_index].y;
+            used[jx][jy] = true;
+            used_image(used, pointList[i], pointList[max_dist_index]);
+            ret.push_back(make_pair(pointList[i], pointList[max_dist_index]));
+        }
+    }
+    return ret;
+}
+
+PREDICATE(clw_get_strokes, 3){
+    char *add = (char*) A1;
+    vec *data = str2ptr<vec>(add);
+    mat ori_img(*data);
+    ori_img.reshape(28, 28);
+
+    vector<vector<int>> img(28);
+    for (int i = 0; i < 28; ++i){
+        for (int j = 0; j < 28; ++j){
+            img[i].push_back((int)(ori_img(i, j) * 255));
+        }
+    }
+    vector<vector<int>> points = list2vecvec<int>(A2, -1, 2);
+    vector<PointI2D> pointList;
+    for (int i = 0; i < points.size(); ++i){
+        pointList.push_back(PointI2D(points[i][0], points[i][1]));
+    }
+    vector<pair<PointI2D, PointI2D>> strokes = get_strokes(img, pointList);
+    vector<vector<long>> ret;
+    vector<long> tmp;
+    for (int i = 0; i < strokes.size(); ++i){
+        tmp.clear();
+        tmp.push_back(strokes[i].first.x);
+        tmp.push_back(strokes[i].first.y);
+        ret.push_back(tmp);
+        tmp.clear();
+        tmp.push_back(strokes[i].second.x);
+        tmp.push_back(strokes[i].second.y);
+        ret.push_back(tmp);
+    }
+    cout << ret.size() << ' ' << ret[0].size() << endl;
+    return A3 = vecvec2list<long>(ret);  
+}
 
 /* mnist_create_mask(Centers, Neighbor_size, Mask)
  * Centers: a group of 2d positions, [[x1, y1], [x2, y2], ...]
@@ -120,8 +299,14 @@ PREDICATE(left_of, 2) {
 }
 */
 
-inline void swap_int(int *a, int *b) {
-	*a ^= *b;
-	*b ^= *a;
-	*a ^= *b;
+
+inline void swap_int(int *a, int *b){
+    int t = *a;
+    *a = *b;
+    *b = t;
 }
+//inline void swap_int(int *a, int *b) {
+//	*a ^= *b;
+//	*b ^= *a;
+//	*a ^= *b;
+//}
